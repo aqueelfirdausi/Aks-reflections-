@@ -201,7 +201,16 @@ def cmd_dump(args):
     lines.append("=== END OF REFLECTION ===")
     lines.append("Paste this at the start of any AI chat to restore full context.")
 
-    print("\n".join(lines))
+    output = "\n".join(lines)
+    print(output)
+
+    if getattr(args, "copy", False):
+        try:
+            import pyperclip
+            pyperclip.copy(output)
+            print("\n[Copied to clipboard]")
+        except ImportError:
+            print("\nTip: install pyperclip for auto-copy  →  pip install pyperclip")
 
 
 # ── CLI wiring ─────────────────────────────────────────────────────────────────
@@ -231,6 +240,7 @@ def main():
     p_next.set_defaults(func=cmd_next)
 
     p_dump = sub.add_parser("dump", help="Print full context to paste into any AI")
+    p_dump.add_argument("--copy", action="store_true", help="Copy output to clipboard (requires pyperclip)")
     p_dump.set_defaults(func=cmd_dump)
 
     p_status = sub.add_parser("status", help="Pretty-print current project state in terminal")
