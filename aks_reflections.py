@@ -5,6 +5,7 @@ import sys
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 # When frozen by PyInstaller (--windowed), stdout is a NullWriter with no reconfigure().
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
@@ -15,7 +16,8 @@ if getattr(sys, "frozen", False) and len(sys.argv) == 1:
     os.chdir(os.path.dirname(sys.executable))
     sys.argv.append("serve")
 
-AKS_FILE = "aks.json"
+AKS_FILE    = "reflections.json"
+REGISTRY    = Path.home() / ".aks-reflections" / "projects.json"
 
 # ── embedded dashboard ──────────────────────────────────────────────────────────
 
@@ -99,6 +101,30 @@ header {
   animation: pulse 2.4s ease-in-out infinite;
 }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.proj-select {
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .2s;
+  max-width: 200px;
+}
+.proj-select:hover  { border-color: rgba(167,139,250,.5); }
+.proj-select:focus  { border-color: rgba(167,139,250,.7); }
+.proj-select option { background: #0d0d1a; }
 
 .copy-btn {
   background: linear-gradient(135deg, rgba(167,139,250,.18), rgba(96,165,250,.18));
@@ -353,7 +379,12 @@ header {
       <span class="pulse"></span> live
     </div>
   </div>
-  <button class="copy-btn" onclick="copyDump()">&#128203; Copy Dump</button>
+  <div class="header-right">
+    <select class="proj-select" id="proj-select" onchange="switchProject(this.value)" title="Switch project">
+      <option value="">Loading projects&hellip;</option>
+    </select>
+    <button class="copy-btn" onclick="copyDump()">&#128203; Copy Dump</button>
+  </div>
 </header>
 
 <div class="actions glass">
@@ -406,6 +437,42 @@ async function apiPost(path, body) {
   });
   if (!r.ok) throw new Error(r.status);
   return r.json();
+}
+
+// ── project switcher ──────────────────────────────────────────────────────────
+
+async function loadProjects() {
+  try {
+    var res = await apiFetch('/api/projects');
+    var sel = document.getElementById('proj-select');
+    sel.innerHTML = '';
+    if (!res.projects || !res.projects.length) {
+      sel.innerHTML = '<option value="">No other projects</option>';
+      return;
+    }
+    res.projects.forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.path;
+      opt.textContent = p.name;
+      if (p.current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e) {
+    document.getElementById('proj-select').innerHTML = '<option value="">—</option>';
+  }
+}
+
+async function switchProject(path) {
+  if (!path) return;
+  try {
+    await apiPost('/api/switch', {path: path});
+    _mtime = 0;
+    await loadData(false);
+    await loadProjects();
+    toast('Switched project', 'ok');
+  } catch(e) {
+    toast('Switch failed', 'err');
+  }
 }
 
 // ── render ────────────────────────────────────────────────────────────────────
@@ -498,7 +565,7 @@ async function loadData(indicator) {
     if (indicator) toast('Refreshed', 'ok');
   } catch(e) {
     document.getElementById('grid').style.opacity = '1';
-    toast('Could not load aks.json', 'err');
+    toast('Could not load reflections.json', 'err');
   }
 }
 
@@ -588,6 +655,7 @@ function toast(msg, type) {
 // ── boot ──────────────────────────────────────────────────────────────────────
 
 loadData(false);
+loadProjects();
 setInterval(pollMtime, 2500);
 </script>
 </body>
@@ -616,21 +684,23 @@ def make_entry(text):
     return {"text": text, "at": now_ts()}
 
 
-def load_data():
-    if not os.path.exists(AKS_FILE):
-        print(f"Error: {AKS_FILE} not found. Run 'python aks.py init' first.")
+def load_data(path=None):
+    target = path or AKS_FILE
+    if not os.path.exists(target):
+        print(f"Error: {target} not found. Run 'aks-reflections init' first.")
         sys.exit(1)
     try:
-        with open(AKS_FILE, "r", encoding="utf-8") as f:
+        with open(target, "r", encoding="utf-8") as f:
             return json.load(f)
     except json.JSONDecodeError:
-        print(f"Error: {AKS_FILE} is corrupted (invalid JSON). Fix or delete it and run init again.")
+        print(f"Error: {target} is corrupted (invalid JSON). Fix or delete it and run init again.")
         sys.exit(1)
 
 
-def save_data(data):
+def save_data(data, path=None):
+    target = path or AKS_FILE
     data["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with open(AKS_FILE, "w", encoding="utf-8") as f:
+    with open(target, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
@@ -642,6 +712,46 @@ def fmt_last_updated(raw):
     except ValueError:
         return raw
 
+
+# ── global project registry ──────────────────────────────────────────────────
+
+def load_registry():
+    if not REGISTRY.exists():
+        return []
+    try:
+        with open(REGISTRY, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def save_registry(projects):
+    REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+    with open(REGISTRY, "w", encoding="utf-8") as f:
+        json.dump(projects, f, indent=2)
+
+
+def register_project(name, path):
+    """Add or update a project in the global registry."""
+    projects = load_registry()
+    path_str = str(Path(path).resolve())
+    for p in projects:
+        if p["path"] == path_str:
+            p["name"] = name  # update name if renamed
+            save_registry(projects)
+            return
+    projects.append({"name": name, "path": path_str})
+    save_registry(projects)
+
+
+def unregister_project(path):
+    projects = load_registry()
+    path_str = str(Path(path).resolve())
+    projects = [p for p in projects if p["path"] != path_str]
+    save_registry(projects)
+
+
+# ── dump builder ──────────────────────────────────────────────────────────────
 
 def build_dump(data):
     name    = data.get("project_name", "unknown")
@@ -683,6 +793,10 @@ def build_dump(data):
 
 # ── HTTP server ─────────────────────────────────────────────────────────────────
 
+# Mutable server state — active project path (can be switched at runtime)
+_active_path = [AKS_FILE]   # list so it's mutable from handler
+
+
 class AKSHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -708,33 +822,57 @@ class AKSHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/data":
             try:
-                self._json(load_data())
+                self._json(load_data(_active_path[0]))
             except SystemExit:
-                self._json({"error": "aks.json not found"}, 404)
+                self._json({"error": "reflections.json not found"}, 404)
 
         elif path == "/api/mtime":
-            mtime = os.path.getmtime(AKS_FILE) if os.path.exists(AKS_FILE) else 0
+            mtime = os.path.getmtime(_active_path[0]) if os.path.exists(_active_path[0]) else 0
             self._json({"mtime": mtime})
 
         elif path == "/api/dump":
             try:
-                self._json({"text": build_dump(load_data())})
+                self._json({"text": build_dump(load_data(_active_path[0]))})
             except SystemExit:
-                self._json({"error": "aks.json not found"}, 404)
+                self._json({"error": "reflections.json not found"}, 404)
+
+        elif path == "/api/projects":
+            cwd_file = str(Path(_active_path[0]).resolve())
+            projects = load_registry()
+            result = []
+            for p in projects:
+                proj_file = str(Path(p["path"]) / AKS_FILE)
+                result.append({
+                    "name":    p["name"],
+                    "path":    proj_file,
+                    "current": proj_file == cwd_file
+                })
+            self._json({"projects": result})
 
         else:
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
-        if self.path.split("?")[0] != "/api/write":
-            self._json({"error": "not found"}, 404)
-            return
+        path = self.path.split("?")[0]
 
         length = int(self.headers.get("Content-Length", 0))
         try:
-            body   = json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(length))
         except json.JSONDecodeError:
             self._json({"error": "invalid JSON"}, 400)
+            return
+
+        if path == "/api/switch":
+            new_path = body.get("path", "").strip()
+            if not new_path or not os.path.exists(new_path):
+                self._json({"error": "project file not found"}, 404)
+                return
+            _active_path[0] = new_path
+            self._json({"ok": True})
+            return
+
+        if path != "/api/write":
+            self._json({"error": "not found"}, 404)
             return
 
         action = body.get("action", "")
@@ -745,9 +883,9 @@ class AKSHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            data = load_data()
+            data = load_data(_active_path[0])
         except SystemExit:
-            self._json({"error": "aks.json not found"}, 404)
+            self._json({"error": "reflections.json not found"}, 404)
             return
 
         if   action == "done":        data["what_is_built"].append(make_entry(text))
@@ -760,7 +898,7 @@ class AKSHandler(BaseHTTPRequestHandler):
             self._json({"error": f"unknown action: {action}"}, 400)
             return
 
-        save_data(data)
+        save_data(data, _active_path[0])
         self._json({"ok": True})
 
 
@@ -772,8 +910,8 @@ def cmd_init(args):
         sys.exit(1)
     name = args.name if args.name else os.path.basename(os.getcwd())
     data = {
-        "project_name": name,
-        "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "project_name":  name,
+        "last_updated":  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "what_is_built": [],
         "in_progress":   [],
         "decisions_made":[],
@@ -782,7 +920,9 @@ def cmd_init(args):
         "next_task":     ""
     }
     save_data(data)
+    register_project(name, os.getcwd())
     print(f"Initialized {AKS_FILE} for project: {name}")
+    print(f"Registered in global projects list.")
 
 
 def cmd_done(args):
@@ -807,6 +947,39 @@ def cmd_bug(args):
     print(f"Bug fix logged: {text}")
 
 
+def cmd_inprogress(args):
+    text = args.text.strip()
+    if not text:
+        print("Error: description cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    data["in_progress"].append(make_entry(text))
+    save_data(data)
+    print(f"Logged as in progress: {text}")
+
+
+def cmd_decision(args):
+    text = args.text.strip()
+    if not text:
+        print("Error: description cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    data["decisions_made"].append(make_entry(text))
+    save_data(data)
+    print(f"Decision logged: {text}")
+
+
+def cmd_donttouch(args):
+    text = args.text.strip()
+    if not text:
+        print("Error: description cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    data["do_not_touch"].append(make_entry(text))
+    save_data(data)
+    print(f"Logged as do not touch: {text}")
+
+
 def cmd_next(args):
     text = args.text.strip()
     if not text:
@@ -825,7 +998,7 @@ def cmd_status(args):
     divider = "=" * 50
 
     print(divider)
-    print(f"  AKS STATUS — {name}")
+    print(f"  AKS REFLECTIONS — {name}")
     if updated:
         print(f"  Last updated: {updated}")
     print(divider)
@@ -876,10 +1049,310 @@ def cmd_dump(args):
             print("\nTip: install pyperclip for auto-copy  →  pip install pyperclip")
 
 
+def cmd_register(args):
+    """Register the current folder's project into the global list."""
+    if not os.path.exists(AKS_FILE):
+        print(f"Error: {AKS_FILE} not found. Run 'aks-reflections init' first.")
+        sys.exit(1)
+    data = load_data()
+    name = data.get("project_name", os.path.basename(os.getcwd()))
+    register_project(name, os.getcwd())
+    print(f"Registered '{name}' → {os.getcwd()}")
+
+
+def cmd_projects(args):
+    """List all registered projects."""
+    projects = load_registry()
+    if not projects:
+        print("No projects registered yet.")
+        print("Tip: 'aks-reflections init' auto-registers, or use 'aks-reflections register' in existing projects.")
+        return
+
+    cwd_resolved = str(Path(os.getcwd()).resolve())
+    divider = "=" * 50
+    print(divider)
+    print("  AKS REFLECTIONS — Registered Projects")
+    print(divider)
+    for i, p in enumerate(projects, 1):
+        is_current = str(Path(p["path"]).resolve()) == cwd_resolved
+        marker = "  ◀ current" if is_current else ""
+        status = ""
+        rf = Path(p["path"]) / AKS_FILE
+        if not rf.exists():
+            status = "  ⚠ reflections.json missing"
+        print(f"  {i}. {p['name']}{marker}{status}")
+        print(f"     {p['path']}")
+    print(divider)
+
+
+def cmd_switch(args):
+    """Print cd command to switch to a registered project."""
+    projects = load_registry()
+    if not projects:
+        print("No projects registered. Run 'aks-reflections init' in a project folder first.")
+        sys.exit(1)
+
+    name_query = args.name.lower()
+    matches = [p for p in projects if name_query in p["name"].lower()]
+
+    if not matches:
+        print(f"No project matching '{args.name}' found.")
+        print("Registered projects:")
+        for p in projects:
+            print(f"  {p['name']}  →  {p['path']}")
+        sys.exit(1)
+
+    if len(matches) > 1:
+        print(f"Multiple matches for '{args.name}':")
+        for p in matches:
+            print(f"  {p['name']}  →  {p['path']}")
+        print("Be more specific.")
+        sys.exit(1)
+
+    proj = matches[0]
+    print(proj["path"])
+    print(f"\n# To switch, run:")
+    print(f"  cd \"{proj['path']}\"")
+
+
+def cmd_unregister(args):
+    """Remove current project from the global registry."""
+    cwd = str(Path(os.getcwd()).resolve())
+    projects_before = load_registry()
+    unregister_project(cwd)
+    projects_after = load_registry()
+    if len(projects_before) == len(projects_after):
+        print(f"This folder was not in the registry: {cwd}")
+    else:
+        print(f"Unregistered: {cwd}")
+
+
+SECTION_MAP = {
+    "done":       "what_is_built",
+    "bugs":       "bugs_fixed",
+    "inprogress": "in_progress",
+    "decisions":  "decisions_made",
+    "donttouch":  "do_not_touch",
+    "next":       "next_task",
+}
+
+SECTION_LABELS = {
+    "what_is_built":  "Done",
+    "bugs_fixed":     "Bugs Fixed",
+    "in_progress":    "In Progress",
+    "decisions_made": "Decisions Made",
+    "do_not_touch":   "Do Not Touch",
+    "next_task":      "Next Task",
+}
+
+
+def cmd_undo(args):
+    data = load_data()
+
+    # Collect the last entry from every list section + next_task as candidates
+    LIST_SECTIONS = [
+        ("what_is_built",  "Done"),
+        ("in_progress",    "In Progress"),
+        ("decisions_made", "Decisions Made"),
+        ("bugs_fixed",     "Bugs Fixed"),
+        ("do_not_touch",   "Do Not Touch"),
+    ]
+
+    best_key   = None
+    best_label = None
+    best_at    = ""
+    best_text  = ""
+    best_is_nt = False
+
+    for key, label in LIST_SECTIONS:
+        items = data.get(key, [])
+        if not items:
+            continue
+        item = items[-1]
+        at   = entry_at(item)
+        text = entry_text(item)
+        if at >= best_at:
+            best_key, best_label, best_at, best_text, best_is_nt = key, label, at, text, False
+
+    nt = data.get("next_task", "")
+    if nt:
+        at   = entry_at(nt)
+        text = entry_text(nt)
+        if at >= best_at:
+            best_key, best_label, best_at, best_text, best_is_nt = "next_task", "Next Task", at, text, True
+
+    if best_key is None:
+        print("Nothing to undo.")
+        return
+
+    if best_is_nt:
+        data["next_task"] = ""
+    else:
+        data[best_key].pop()
+
+    save_data(data)
+    print(f"Undone [{best_label}]: {best_text}")
+
+
+def cmd_search(args):
+    data  = load_data()
+    query = args.query.lower()
+
+    sections = [
+        ("what_is_built",  "Done"),
+        ("in_progress",    "In Progress"),
+        ("decisions_made", "Decisions Made"),
+        ("bugs_fixed",     "Bugs Fixed"),
+        ("do_not_touch",   "Do Not Touch"),
+    ]
+
+    hits = []
+    for key, label in sections:
+        for item in data.get(key, []):
+            text = entry_text(item)
+            if query in text.lower():
+                hits.append((label, entry_at(item), text))
+
+    nt = data.get("next_task", "")
+    if nt:
+        text = entry_text(nt)
+        if query in text.lower():
+            hits.append(("Next Task", entry_at(nt), text))
+
+    if not hits:
+        print(f"No results for '{args.query}'.")
+        return
+
+    print(f"{len(hits)} result{'s' if len(hits) != 1 else ''} for '{args.query}':\n")
+    for label, at, text in hits:
+        ts = f"  [{at}]" if at else ""
+        print(f"  [{label}]{ts}")
+        print(f"    {text}")
+
+
+def cmd_rename(args):
+    new_name = args.name.strip()
+    if not new_name:
+        print("Error: name cannot be empty.")
+        sys.exit(1)
+    data = load_data()
+    old_name = data.get("project_name", "")
+    data["project_name"] = new_name
+    save_data(data)
+    # Sync the registry entry for this folder
+    cwd = str(Path(os.getcwd()).resolve())
+    projects = load_registry()
+    for p in projects:
+        if str(Path(p["path"]).resolve()) == cwd:
+            p["name"] = new_name
+            break
+    save_registry(projects)
+    print(f"Renamed: '{old_name}' → '{new_name}'")
+
+
+def cmd_clear(args):
+    data = load_data()
+
+    if args.all:
+        if not args.confirm:
+            print("This will erase all entries in every section.")
+            print("Re-run with --confirm to proceed:")
+            print("  python aks_reflections.py clear --all --confirm")
+            sys.exit(1)
+        cleared = []
+        for key in ("what_is_built", "in_progress", "decisions_made", "bugs_fixed", "do_not_touch"):
+            count = len(data.get(key, []))
+            if count:
+                cleared.append(f"  {SECTION_LABELS[key]} ({count} entries)")
+            data[key] = []
+        if data.get("next_task"):
+            cleared.append("  Next Task")
+        data["next_task"] = ""
+        save_data(data)
+        if cleared:
+            print("Cleared:")
+            print("\n".join(cleared))
+        else:
+            print("Nothing to clear — all sections already empty.")
+        return
+
+    if not args.section:
+        print("Specify a section to clear, or use --all --confirm to wipe everything.")
+        print("Sections: done, bugs, inprogress, decisions, donttouch, next")
+        sys.exit(1)
+
+    key = SECTION_MAP.get(args.section.lower())
+    if not key:
+        print(f"Unknown section '{args.section}'. Choose from: {', '.join(SECTION_MAP)}")
+        sys.exit(1)
+
+    label = SECTION_LABELS[key]
+    if key == "next_task":
+        if not data.get("next_task"):
+            print(f"{label} is already empty.")
+        else:
+            data["next_task"] = ""
+            save_data(data)
+            print(f"Cleared: {label}")
+    else:
+        count = len(data.get(key, []))
+        if count == 0:
+            print(f"{label} is already empty.")
+        else:
+            data[key] = []
+            save_data(data)
+            print(f"Cleared: {label} ({count} entr{'y' if count == 1 else 'ies'} removed)")
+
+
+def cmd_export(args):
+    data = load_data()
+    name    = data.get("project_name", "unknown")
+    updated = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    lines = [f"# {name}", f"*Exported on {updated}*", ""]
+
+    def md_section(heading, items):
+        lines.append(f"## {heading}")
+        if items:
+            for item in items:
+                at   = entry_at(item)
+                text = entry_text(item)
+                ts   = f"`{at}` " if at else ""
+                lines.append(f"- {ts}{text}")
+        else:
+            lines.append("- *(none)*")
+        lines.append("")
+
+    md_section("✅ Done",  data.get("what_is_built",  []))
+    md_section("🐛 Bugs",  data.get("bugs_fixed",     []))
+    md_section("🔄 In Progress", data.get("in_progress", []))
+    md_section("🧠 Decisions",   data.get("decisions_made", []))
+    md_section("🚫 Do Not Touch", data.get("do_not_touch", []))
+
+    lines.append("## 🔜 Next")
+    nt = data.get("next_task", "")
+    if nt:
+        at   = entry_at(nt)
+        text = entry_text(nt)
+        ts   = f"`{at}` " if at else ""
+        lines.append(f"- {ts}{text}")
+    else:
+        lines.append("- *(none)*")
+    lines.append("")
+
+    raw_path = args.path if args.path else "reflections.md"
+    out_path = Path(os.path.expanduser(raw_path)).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Exported to {out_path}")
+
+
 def cmd_serve(args):
     if not os.path.exists(AKS_FILE):
-        print(f"Error: {AKS_FILE} not found. Run 'python aks.py init' first.")
+        print(f"Error: {AKS_FILE} not found. Run 'aks-reflections init' first.")
         sys.exit(1)
+
+    _active_path[0] = os.path.abspath(AKS_FILE)
 
     ports  = [5050, 5051, 5052, 8080, 8081]
     server = None
@@ -897,7 +1370,7 @@ def cmd_serve(args):
         sys.exit(1)
 
     url = f"http://localhost:{port}"
-    print(f"AKS Dashboard  →  {url}")
+    print(f"AKS Reflections Dashboard  →  {url}")
     print("Press Ctrl+C to stop.")
     webbrowser.open(url)
     try:
@@ -910,13 +1383,13 @@ def cmd_serve(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="aks",
-        description="AKS — local AI memory system for your project"
+        prog="aks-reflections",
+        description="AKS Reflections — local AI memory system for your projects"
     )
     sub = parser.add_subparsers(dest="command", metavar="command")
     sub.required = True
 
-    p_init = sub.add_parser("init", help="Create aks.json for this project")
+    p_init = sub.add_parser("init", help="Create reflections.json for this project")
     p_init.add_argument("name", nargs="?", help="Project name (defaults to folder name)")
     p_init.set_defaults(func=cmd_init)
 
@@ -927,6 +1400,18 @@ def main():
     p_bug = sub.add_parser("bug", help="Log a bug fix")
     p_bug.add_argument("text", help="What was fixed")
     p_bug.set_defaults(func=cmd_bug)
+
+    p_inprogress = sub.add_parser("inprogress", help="Log something as in progress")
+    p_inprogress.add_argument("text", help="What you are working on")
+    p_inprogress.set_defaults(func=cmd_inprogress)
+
+    p_decision = sub.add_parser("decision", help="Log a decision made")
+    p_decision.add_argument("text", help="What was decided")
+    p_decision.set_defaults(func=cmd_decision)
+
+    p_donttouch = sub.add_parser("donttouch", help="Mark something as do not touch")
+    p_donttouch.add_argument("text", help="What to leave alone")
+    p_donttouch.set_defaults(func=cmd_donttouch)
 
     p_next = sub.add_parser("next", help="Set the next task")
     p_next.add_argument("text", help="What to do next")
@@ -941,6 +1426,41 @@ def main():
 
     p_serve = sub.add_parser("serve", help="Open local web dashboard in browser")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_projects = sub.add_parser("projects", help="List all registered projects")
+    p_projects.set_defaults(func=cmd_projects)
+
+    p_register = sub.add_parser("register", help="Register this folder into the global projects list")
+    p_register.set_defaults(func=cmd_register)
+
+    p_unregister = sub.add_parser("unregister", help="Remove this folder from the global projects list")
+    p_unregister.set_defaults(func=cmd_unregister)
+
+    p_switch = sub.add_parser("switch", help="Find a registered project path by name")
+    p_switch.add_argument("name", help="Project name (partial match works)")
+    p_switch.set_defaults(func=cmd_switch)
+
+    p_export = sub.add_parser("export", help="Export project to a Markdown file")
+    p_export.add_argument("path", nargs="?", help="Output path (default: reflections.md)")
+    p_export.set_defaults(func=cmd_export)
+
+    p_undo = sub.add_parser("undo", help="Remove the most recently added entry")
+    p_undo.set_defaults(func=cmd_undo)
+
+    p_rename = sub.add_parser("rename", help="Rename this project and sync the registry")
+    p_rename.add_argument("name", help="New project name")
+    p_rename.set_defaults(func=cmd_rename)
+
+    p_search = sub.add_parser("search", help="Search entries across all sections")
+    p_search.add_argument("query", help="Text to search for (case-insensitive)")
+    p_search.set_defaults(func=cmd_search)
+
+    p_clear = sub.add_parser("clear", help="Clear a section or all entries")
+    p_clear.add_argument("section", nargs="?",
+                         help="Section to clear: done, bugs, inprogress, decisions, donttouch, next")
+    p_clear.add_argument("--all",     action="store_true", help="Clear every section")
+    p_clear.add_argument("--confirm", action="store_true", help="Required with --all")
+    p_clear.set_defaults(func=cmd_clear)
 
     args = parser.parse_args()
     args.func(args)

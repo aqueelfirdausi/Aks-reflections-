@@ -1,172 +1,262 @@
 # AKS Reflections
 
-> Local AI memory system. Works with any AI. Zero dependencies.
+**Local AI memory system for your projects**
+
+AKS Reflections keeps a living `reflections.json` in each project folder, tracking what's been built, what's in progress, decisions made, bugs fixed, and what comes next. Run `dump` at any time to get a paste-ready context block for any AI chat — no cloud, no accounts, no pip install. One Python file.
 
 ---
 
-## The Problem
+## Installation
 
-Every AI session starts blank.
+Download `aks_reflections.py` and drop it in your project folder or anywhere on your PATH.
 
-You explain the same project over and over. The AI hallucinates what's done, re-does work you already finished, forgets decisions you made last night. Hours wasted. Every single day.
+**Requirements:** Python 3.7+ — zero dependencies.
 
-This is not a Claude problem. Not a ChatGPT problem. Not a Gemini problem. It is every AI, every session, every time.
+```bash
+# Optional: enables dump --copy
+pip install pyperclip
+```
 
-## The Solution
+## Setup
 
-One local JSON file that holds the real truth of your project.
+```bash
+# In your project folder:
+python aks_reflections.py init
+# → Initialized reflections.json for project: my-app
+# → Registered in global projects list.
+```
 
-Run one command at the start of any session. Paste the output into any AI. It instantly knows everything — what's built, what's broken, what decisions you made, what not to touch, what's next.
-
-No cloud. No account. No subscription. No prompt tricks. Just honest local memory you control.
+That creates `reflections.json` and registers the project in `~/.aks-reflections/projects.json`. Add `reflections.json` to your `.gitignore`.
 
 ---
 
-## Works With Any AI
+## Command Reference
 
-- Claude
-- ChatGPT
-- Gemini
-- Grok
-- Codex
-- Any AI that accepts text input
-
----
-
-## Install
-
-No install. Just Python 3.
-
-```bash
-git clone https://github.com/aqueelfirdausi/Aks-reflections-.git
-cd Aks-reflections-
-```
-
-That's it.
-
----
-
-## Usage
-
-### Start a new project
-
-```bash
-python aks.py init my-project
-```
-
-### Log what you built
-
-```bash
-python aks.py done "built the login page"
-```
-
-### Log a bug you fixed
-
-```bash
-python aks.py bug "fixed token loop on login — cleared localStorage"
-```
-
-### Set what's next
-
-```bash
-python aks.py next "connect dashboard to backend API"
-```
-
-### Check current state
-
-```bash
-python aks.py status
-```
-
-### Dump full context for any AI
-
-```bash
-python aks.py dump
-```
-
-Copy the output. Paste at the top of any AI chat. Done.
-
----
-
-## The Dump Output
-
-```
-====== AKS REFLECTION — my-project ======
-Last updated: 2026-06-15 05:30
-
-WHAT IS BUILT:
-- built the login page [2026-06-15 02:14]
-- built dashboard layout [2026-06-15 03:45]
-
-BUGS FIXED (do not repeat):
-- fixed token loop on login — cleared localStorage [2026-06-15 04:10]
-
-DECISIONS MADE:
-- using SQLite not PostgreSQL
-
-DO NOT TOUCH:
-- api/routes folder
-
-NEXT TASK:
-- connect dashboard to backend API
-
-====== END — paste above into any AI ======
-```
-
----
-
-## What aks.json Looks Like
-
-```json
-{
-  "project_name": "my-project",
-  "last_updated": "2026-06-15T05:30:00Z",
-  "what_is_built": [
-    { "text": "built the login page", "at": "2026-06-15 02:14" }
-  ],
-  "in_progress": [],
-  "decisions_made": [],
-  "bugs_fixed": [
-    { "text": "fixed token loop on login", "at": "2026-06-15 04:10" }
-  ],
-  "do_not_touch": [],
-  "next_task": { "text": "connect dashboard to backend API", "at": "2026-06-15 05:30" }
-}
-```
-
----
-
-## Commands
-
-| Command | What it does |
+| Command | Description |
 |---|---|
-| `python aks.py init [name]` | Creates aks.json in current folder |
-| `python aks.py done "text"` | Logs something you finished |
-| `python aks.py bug "text"` | Logs a bug fix — AI won't repeat it |
-| `python aks.py next "text"` | Sets the next task |
-| `python aks.py status` | Pretty prints current project state |
-| `python aks.py dump` | Prints full context ready to paste into any AI |
+| `init [name]` | Create `reflections.json`, register project |
+| `done <text>` | Log something finished (What is Built) |
+| `bug <text>` | Log a bug fix |
+| `inprogress <text>` | Log something in progress |
+| `decision <text>` | Log a decision made |
+| `donttouch <text>` | Mark something as do not touch |
+| `next <text>` | Set the next task (replaces previous) |
+| `undo` | Remove the most recently added entry |
+| `rename <name>` | Rename project, syncs registry |
+| `status` | Pretty-print all sections in terminal |
+| `dump [--copy]` | Print AI-ready context block, optionally copy |
+| `export [path]` | Save project as a Markdown file |
+| `search <query>` | Case-insensitive search across all sections |
+| `clear <section>` | Clear one section |
+| `clear --all --confirm` | Wipe all sections |
+| `serve` | Open live web dashboard in browser |
+| `projects` | List all registered projects |
+| `register` | Register current folder in global list |
+| `unregister` | Remove current folder from global list |
+| `switch <name>` | Print path to a registered project |
 
 ---
 
-## Roadmap
+## Examples
 
-- [x] v0.1 — 5 core commands, stdlib only
-- [x] v0.2 — timestamps, status command, backward compat
-- [ ] v0.3 — decisions and do-not-touch commands
-- [ ] v0.4 — multiple dump modes (--code, --chat, --quick)
-- [ ] v1.0 — web dashboard UI
+### Logging work
+
+```bash
+python aks_reflections.py done "added JWT auth"
+# Logged as built: added JWT auth
+
+python aks_reflections.py bug "fixed null pointer on empty config"
+# Bug fix logged: fixed null pointer on empty config
+
+python aks_reflections.py inprogress "refactoring the data layer"
+# Logged as in progress: refactoring the data layer
+
+python aks_reflections.py decision "use postgres over sqlite for multi-user support"
+# Decision logged: use postgres over sqlite for multi-user support
+
+python aks_reflections.py donttouch "SECTION_MAP — clear and search depend on this"
+# Logged as do not touch: SECTION_MAP — clear and search depend on this
+
+python aks_reflections.py next "add pagination to project list"
+# Next task set: add pagination to project list
+```
+
+### Undoing a mistake
+
+```bash
+python aks_reflections.py done "wrong entry"
+python aks_reflections.py undo
+# Undone [Done]: wrong entry
+```
+
+`undo` finds the most recently added entry across all sections by timestamp and removes it. No confirmation needed — it's one step.
+
+### Viewing status
+
+```bash
+python aks_reflections.py status
+```
+
+```
+==================================================
+  AKS REFLECTIONS — my-app
+  Last updated: 2026-06-15 14:00 UTC
+==================================================
+
+WHAT IS BUILT  (2)
+  [2026-06-15 13:45]  added JWT auth
+  [2026-06-15 13:52]  fixed null pointer on empty config
+
+IN PROGRESS  (1)
+  [2026-06-15 13:58]  refactoring the data layer
+
+NEXT TASK
+  [2026-06-15 14:00]  add pagination to project list
+==================================================
+```
+
+### Dumping context for AI
+
+```bash
+python aks_reflections.py dump
+python aks_reflections.py dump --copy   # also copies to clipboard
+```
+
+Paste the output at the start of any AI chat to instantly restore full project context.
+
+### Exporting to Markdown
+
+```bash
+python aks_reflections.py export                    # → reflections.md (current dir)
+python aks_reflections.py export ~/docs/my-app.md  # absolute path
+python aks_reflections.py export reports/week1.md  # relative path, dirs auto-created
+```
+
+### Searching entries
+
+```bash
+python aks_reflections.py search auth
+# 2 results for 'auth':
+#   [Done]  [2026-06-15 13:45]
+#     added JWT auth
+#   [Decisions Made]  [2026-06-15 13:50]
+#     use postgres over sqlite for multi-user support
+```
+
+Case-insensitive. Searches all sections including Next Task.
+
+### Clearing entries
+
+```bash
+python aks_reflections.py clear done         # clears What is Built
+python aks_reflections.py clear bugs         # clears Bugs Fixed
+python aks_reflections.py clear inprogress   # clears In Progress
+python aks_reflections.py clear decisions    # clears Decisions Made
+python aks_reflections.py clear donttouch    # clears Do Not Touch
+python aks_reflections.py clear next         # clears Next Task
+
+python aks_reflections.py clear --all                   # blocked — prints safety hint
+python aks_reflections.py clear --all --confirm         # wipes everything
+```
+
+### Renaming a project
+
+```bash
+python aks_reflections.py rename "my-app-v2"
+# Renamed: 'my-app' → 'my-app-v2'
+```
+
+Updates `project_name` in `reflections.json` and syncs `~/.aks-reflections/projects.json` in one step.
+
+### Web dashboard
+
+```bash
+python aks_reflections.py serve
+# AKS Reflections Dashboard  →  http://localhost:5050
+```
+
+Opens a local dashboard in the browser. Features:
+- Live reload every 2.5 seconds when `reflections.json` changes
+- **Done / Bug Fix / Next Task / In Progress** buttons log entries without touching the terminal
+- **Copy Dump** copies the full AI context block to clipboard
+- **Project switcher** dropdown to jump between all registered projects
 
 ---
 
-## Why
+## Multi-project workflow
 
-Built by a vibe coder who got tired of AI hallucinating every night.
+AKS Reflections maintains a global registry at `~/.aks-reflections/projects.json`. Every `init` registers automatically. Multiple projects, one registry.
 
-The memory problem is not solved by any AI lab yet. This is a simple local workaround that actually works — today, with any AI you already use.
+```bash
+# Project A
+cd ~/projects/api
+python aks_reflections.py init "api"
+
+# Project B
+cd ~/projects/frontend
+python aks_reflections.py init "frontend"
+
+# List all registered projects from anywhere
+python aks_reflections.py projects
+```
+
+```
+==================================================
+  AKS REFLECTIONS — Registered Projects
+==================================================
+  1. api  ◀ current
+     /home/user/projects/api
+  2. frontend
+     /home/user/projects/frontend
+==================================================
+```
+
+### Switching between projects
+
+`switch` prints the path to any registered project by partial name match:
+
+```bash
+python aks_reflections.py switch front
+# /home/user/projects/frontend
+#
+# To switch, run:
+#   cd "/home/user/projects/frontend"
+```
+
+### Dashboard project switcher
+
+The `serve` dashboard has a dropdown in the header — select any registered project to view and log entries for it without leaving the browser.
+
+### Registering an existing project
+
+If you already have a `reflections.json` from before v0.3:
+
+```bash
+python aks_reflections.py register
+# Registered 'my-app' → /home/user/projects/my-app
+```
+
+### Removing a project from the registry
+
+```bash
+python aks_reflections.py unregister
+# Unregistered: /home/user/projects/my-app
+```
+
+This only removes the registry entry — `reflections.json` is untouched.
 
 ---
 
-## License
+## File layout
 
-MIT — use it, fork it, build on it.
+```
+your-project/
+├── aks_reflections.py   ← the whole tool, one file
+└── reflections.json     ← auto-created by init (add to .gitignore)
+```
+
+Global registry:
+```
+~/.aks-reflections/
+└── projects.json        ← shared across all projects
+```
