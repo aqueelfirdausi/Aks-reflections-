@@ -2,28 +2,605 @@ import argparse
 import json
 import os
 import sys
+import webbrowser
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 AKS_FILE = "aks.json"
 
+# ── embedded dashboard ──────────────────────────────────────────────────────────
+
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AKS Reflections</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg:     #07070f;
+  --glass:  rgba(255,255,255,0.04);
+  --gbord:  rgba(255,255,255,0.08);
+  --ghover: rgba(255,255,255,0.07);
+  --text:   #f1f5f9;
+  --sub:    #94a3b8;
+  --muted:  #64748b;
+  --dim:    #334155;
+  --green:  #4ade80;
+  --blue:   #60a5fa;
+  --purple: #a78bfa;
+  --red:    #f87171;
+  --orange: #fb923c;
+  --amber:  #fbbf24;
+}
+
+body {
+  background: var(--bg);
+  background-image:
+    radial-gradient(ellipse at 15% 40%, rgba(139,92,246,.13) 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 15%, rgba(59,130,246,.10) 0%, transparent 55%),
+    radial-gradient(ellipse at 50% 95%, rgba(16,185,129,.06) 0%, transparent 50%);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--gbord);
+  border-radius: 16px;
+}
+
+/* ── header ── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  margin-bottom: 14px;
+  gap: 16px;
+}
+
+.header-left h1 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.5px;
+  white-space: nowrap;
+}
+.header-left h1 .accent { color: var(--purple); }
+.header-left .sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pulse {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+.copy-btn {
+  background: linear-gradient(135deg, rgba(167,139,250,.18), rgba(96,165,250,.18));
+  border: 1px solid rgba(167,139,250,.38);
+  color: var(--text);
+  padding: 9px 20px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .2s;
+}
+.copy-btn:hover {
+  background: linear-gradient(135deg, rgba(167,139,250,.32), rgba(96,165,250,.32));
+  border-color: rgba(167,139,250,.65);
+  box-shadow: 0 4px 22px rgba(139,92,246,.22);
+  transform: translateY(-1px);
+}
+.copy-btn:active { transform: translateY(0); }
+
+/* ── action bar ── */
+.actions {
+  display: flex;
+  gap: 9px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.act {
+  padding: 8px 16px;
+  border-radius: 9px;
+  border: 1px solid;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .18s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.act:hover  { transform: translateY(-1px); }
+.act:active { transform: translateY(0); }
+
+.act-done   { color: var(--green);  border-color: rgba(74,222,128,.32); }
+.act-done:hover   { background: rgba(74,222,128,.11);  box-shadow: 0 0 18px rgba(74,222,128,.14); }
+.act-bug    { color: var(--red);    border-color: rgba(248,113,113,.32); }
+.act-bug:hover    { background: rgba(248,113,113,.11); box-shadow: 0 0 18px rgba(248,113,113,.14); }
+.act-next   { color: var(--amber);  border-color: rgba(251,191,36,.32); }
+.act-next:hover   { background: rgba(251,191,36,.11);  box-shadow: 0 0 18px rgba(251,191,36,.14); }
+.act-status { color: var(--blue);   border-color: rgba(96,165,250,.32); }
+.act-status:hover { background: rgba(96,165,250,.11);  box-shadow: 0 0 18px rgba(96,165,250,.14); }
+
+.refresh-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--dim);
+  color: var(--muted);
+  padding: 7px 13px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .18s;
+}
+.refresh-btn:hover { border-color: var(--muted); color: var(--text); }
+
+/* ── grid ── */
+#grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  transition: opacity .2s;
+}
+@media (max-width: 860px) { #grid { grid-template-columns: repeat(2,1fr); } }
+@media (max-width: 520px) { #grid { grid-template-columns: 1fr; } }
+
+.card {
+  padding: 18px 20px;
+  min-height: 130px;
+  transition: border-color .2s, transform .15s;
+}
+.card:hover { border-color: rgba(255,255,255,.13); }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 12px;
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.card-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.badge {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  background: rgba(255,255,255,.07);
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.entry {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.entry:last-child  { border-bottom: none; padding-bottom: 0; }
+.entry:first-child { padding-top: 0; }
+.entry-text  { color: var(--text); display: block; }
+.entry-time  { font-size: 11px; color: var(--muted); margin-top: 2px; display: block; }
+.none        { font-size: 13px; color: var(--muted); font-style: italic; }
+
+/* next task card — spans full row width */
+.card-next {
+  grid-column: 1 / -1;
+  padding: 18px 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-height: auto;
+}
+.card-next .card-head { margin-bottom: 0; flex-shrink: 0; }
+.next-divider { width: 1px; height: 36px; background: rgba(255,255,255,.08); flex-shrink: 0; }
+.next-body { flex: 1; }
+.next-text { font-size: 16px; font-weight: 600; }
+.next-time { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+/* ── modal ── */
+.overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s;
+}
+.overlay.open { opacity: 1; pointer-events: all; }
+
+.modal {
+  background: rgba(12,12,22,.96);
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 18px;
+  padding: 26px 28px;
+  width: 100%;
+  max-width: 460px;
+  transform: translateY(14px) scale(.97);
+  transition: transform .22s cubic-bezier(.34,1.56,.64,1);
+}
+.overlay.open .modal { transform: translateY(0) scale(1); }
+
+.modal h2 { font-size: 15px; font-weight: 700; margin-bottom: 5px; }
+.modal p  { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+.modal textarea {
+  width: 100%;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  padding: 11px 13px;
+  resize: none;
+  height: 88px;
+  outline: none;
+  transition: border-color .2s;
+}
+.modal textarea:focus  { border-color: rgba(255,255,255,.24); }
+.modal textarea.shake  { border-color: rgba(248,113,113,.6) !important; animation: shake .3s; }
+@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
+
+.modal-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+}
+.modal-hint { font-size: 11px; color: var(--dim); }
+.modal-btns { display: flex; gap: 9px; }
+
+.btn-cancel {
+  background: none;
+  border: 1px solid var(--dim);
+  color: var(--muted);
+  padding: 8px 16px;
+  border-radius: 9px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-cancel:hover { border-color: var(--muted); color: var(--text); }
+
+.btn-save {
+  border: none;
+  padding: 8px 20px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-save:hover { opacity: .85; transform: translateY(-1px); }
+.btn-save:active { transform: translateY(0); }
+
+/* ── toast ── */
+.toast {
+  position: fixed;
+  bottom: 26px; right: 26px;
+  background: rgba(14,14,26,.96);
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 12px;
+  padding: 11px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transform: translateY(70px);
+  opacity: 0;
+  transition: all .25s cubic-bezier(.34,1.56,.64,1);
+  pointer-events: none;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.ok  { border-color: rgba(74,222,128,.4); }
+.toast.err { border-color: rgba(248,113,113,.4); }
+</style>
+</head>
+<body>
+
+<header class="glass">
+  <div class="header-left">
+    <h1>AKS <span class="accent">Reflections</span> &mdash; <span id="proj-name">&hellip;</span></h1>
+    <div class="sub">
+      Last updated: <span id="last-upd">&mdash;</span>
+      &nbsp;&middot;&nbsp;
+      <span class="pulse"></span> live
+    </div>
+  </div>
+  <button class="copy-btn" onclick="copyDump()">&#128203; Copy Dump</button>
+</header>
+
+<div class="actions glass">
+  <button class="act act-done"   onclick="openModal('done',       '&#10003; Log Done',     'What did you just finish building?',    '#4ade80')">&#10003; Done</button>
+  <button class="act act-bug"    onclick="openModal('bug',        '&#128027; Bug Fix',     'What bug did you fix?',                 '#f87171')">&#128027; Bug Fix</button>
+  <button class="act act-next"   onclick="openModal('next',       '&#8594; Next Task',     'What should be done next?',             '#fbbf24')">&#8594; Next Task</button>
+  <button class="act act-status" onclick="openModal('inprogress', '&#8635; In Progress',   'What are you currently working on?',    '#60a5fa')">&#8635; In Progress</button>
+  <button class="refresh-btn"    onclick="refresh()">&#8635; Refresh</button>
+</div>
+
+<div id="grid"></div>
+
+<!-- modal -->
+<div class="overlay" id="overlay" onclick="overlayClick(event)">
+  <div class="modal">
+    <h2 id="m-title"></h2>
+    <p  id="m-desc"></p>
+    <textarea id="m-input" placeholder="Type here&hellip;"></textarea>
+    <div class="modal-foot">
+      <span class="modal-hint">Ctrl+Enter to save &middot; Esc to cancel</span>
+      <div class="modal-btns">
+        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        <button class="btn-save"   onclick="submitModal()" id="m-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+var _action  = null;
+var _mtime   = 0;
+var _toastTm = null;
+
+// ── api ───────────────────────────────────────────────────────────────────────
+
+async function apiFetch(path) {
+  var r = await fetch(path);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+async function apiPost(path, body) {
+  var r = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+// ── render ────────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function eText(item) { return typeof item === 'string' ? item : (item && item.text || ''); }
+function eAt(item)   { return typeof item === 'string' ? '' :  (item && item.at   || ''); }
+
+function renderList(items) {
+  if (!items || !items.length) return '<div class="none">(none)</div>';
+  return items.map(function(item) {
+    var t  = esc(eText(item));
+    var at = eAt(item);
+    return '<div class="entry"><span class="entry-text">' + t + '</span>' +
+           (at ? '<span class="entry-time">' + esc(at) + '</span>' : '') + '</div>';
+  }).join('');
+}
+
+function render(d) {
+  // header
+  document.getElementById('proj-name').textContent = d.project_name || '—';
+  var raw = d.last_updated || '';
+  var upd = raw;
+  if (raw) {
+    try {
+      upd = raw.replace('T',' ').replace('Z',' UTC');
+    } catch(e) {}
+  }
+  document.getElementById('last-upd').textContent = upd;
+
+  // sections
+  var sections = [
+    {key:'what_is_built',  label:'What is Built',  color:'#4ade80', list:true},
+    {key:'in_progress',    label:'In Progress',     color:'#60a5fa', list:true},
+    {key:'decisions_made', label:'Decisions Made',  color:'#a78bfa', list:true},
+    {key:'bugs_fixed',     label:'Bugs Fixed',      color:'#f87171', list:true},
+    {key:'do_not_touch',   label:'Do Not Touch',    color:'#fb923c', list:true},
+  ];
+
+  var html = sections.map(function(s) {
+    var items = d[s.key] || [];
+    return '<div class="card glass">' +
+      '<div class="card-head">' +
+        '<div class="dot" style="background:' + s.color + '"></div>' +
+        '<span class="card-label" style="color:' + s.color + '">' + esc(s.label) + '</span>' +
+        (items.length ? '<span class="badge">' + items.length + '</span>' : '') +
+      '</div>' +
+      renderList(items) +
+      '</div>';
+  }).join('');
+
+  // next task — full-width row
+  var nt     = d.next_task;
+  var ntText = nt ? eText(nt) : '';
+  var ntAt   = nt ? eAt(nt)   : '';
+  html += '<div class="card card-next glass">' +
+    '<div class="card-head">' +
+      '<div class="dot" style="background:#fbbf24"></div>' +
+      '<span class="card-label" style="color:#fbbf24">Next Task</span>' +
+    '</div>' +
+    '<div class="next-divider"></div>' +
+    '<div class="next-body">' +
+      (ntText
+        ? '<div class="next-text" style="color:#fbbf24">' + esc(ntText) + '</div>' +
+          (ntAt ? '<div class="next-time">' + esc(ntAt) + '</div>' : '')
+        : '<div class="none">(none set)</div>') +
+    '</div>' +
+    '</div>';
+
+  var grid = document.getElementById('grid');
+  grid.innerHTML = html;
+}
+
+// ── data loading + polling ────────────────────────────────────────────────────
+
+async function loadData(indicator) {
+  try {
+    var grid = document.getElementById('grid');
+    grid.style.opacity = '.5';
+    var d = await apiFetch('/api/data');
+    render(d);
+    grid.style.opacity = '1';
+    if (indicator) toast('Refreshed', 'ok');
+  } catch(e) {
+    document.getElementById('grid').style.opacity = '1';
+    toast('Could not load aks.json', 'err');
+  }
+}
+
+async function pollMtime() {
+  try {
+    var res = await apiFetch('/api/mtime');
+    if (_mtime && res.mtime !== _mtime) {
+      await loadData(false);
+    }
+    _mtime = res.mtime;
+  } catch(e) {}
+}
+
+function refresh() { loadData(true); }
+
+// ── modal ─────────────────────────────────────────────────────────────────────
+
+function openModal(action, title, desc, color) {
+  _action = action;
+  document.getElementById('m-title').textContent = title;
+  document.getElementById('m-desc').textContent  = desc;
+  document.getElementById('m-input').value = '';
+  document.getElementById('m-input').className = '';
+  var btn = document.getElementById('m-save');
+  btn.style.background = color;
+  btn.style.color = '#07070f';
+  document.getElementById('overlay').classList.add('open');
+  setTimeout(function(){ document.getElementById('m-input').focus(); }, 80);
+}
+
+function closeModal() {
+  document.getElementById('overlay').classList.remove('open');
+  _action = null;
+}
+
+function overlayClick(e) {
+  if (e.target === document.getElementById('overlay')) closeModal();
+}
+
+async function submitModal() {
+  var inp  = document.getElementById('m-input');
+  var text = inp.value.trim();
+  if (!text) {
+    inp.className = 'shake';
+    setTimeout(function(){ inp.className = ''; }, 400);
+    return;
+  }
+  try {
+    await apiPost('/api/write', {action: _action, text: text});
+    closeModal();
+    await loadData(false);
+    toast('Saved', 'ok');
+  } catch(e) {
+    toast('Save failed', 'err');
+  }
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeModal();
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (document.getElementById('overlay').classList.contains('open')) submitModal();
+  }
+});
+
+// ── copy dump ─────────────────────────────────────────────────────────────────
+
+async function copyDump() {
+  try {
+    var res = await apiFetch('/api/dump');
+    await navigator.clipboard.writeText(res.text);
+    toast('Copied to clipboard', 'ok');
+  } catch(e) {
+    toast('Copy failed — check browser permissions', 'err');
+  }
+}
+
+// ── toast ─────────────────────────────────────────────────────────────────────
+
+function toast(msg, type) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + type + ' show';
+  clearTimeout(_toastTm);
+  _toastTm = setTimeout(function(){ el.classList.remove('show'); }, 2400);
+}
+
+// ── boot ──────────────────────────────────────────────────────────────────────
+
+loadData(false);
+setInterval(pollMtime, 2500);
+</script>
+</body>
+</html>"""
+
+
+# ── utilities ───────────────────────────────────────────────────────────────────
 
 def now_ts():
-    """Return current local time as a display string."""
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def entry_text(item):
-    """Extract text from an entry — handles both legacy strings and new dicts."""
     if isinstance(item, dict):
         return item.get("text", "")
     return str(item)
 
 
 def entry_at(item):
-    """Extract timestamp from an entry — returns empty string for legacy strings."""
     if isinstance(item, dict):
         return item.get("at", "")
     return ""
@@ -60,23 +637,143 @@ def fmt_last_updated(raw):
         return raw
 
 
-# ── commands ──────────────────────────────────────────────────────────────────
+def build_dump(data):
+    name    = data.get("project_name", "unknown")
+    updated = fmt_last_updated(data.get("last_updated", ""))
+    lines   = [f"=== AKS REFLECTION — {name} ===", f"Last updated: {updated}", ""]
+
+    def section(title, items):
+        lines.append(f"{title}:")
+        if items:
+            for item in items:
+                text   = entry_text(item)
+                at     = entry_at(item)
+                suffix = f"  [{at}]" if at else ""
+                lines.append(f"- {text}{suffix}")
+        else:
+            lines.append("- (none)")
+        lines.append("")
+
+    section("WHAT IS BUILT",   data.get("what_is_built",  []))
+    section("IN PROGRESS",     data.get("in_progress",    []))
+    section("DECISIONS MADE",  data.get("decisions_made", []))
+    section("BUGS FIXED",      data.get("bugs_fixed",     []))
+    section("DO NOT TOUCH",    data.get("do_not_touch",   []))
+
+    next_task = data.get("next_task", "")
+    lines.append("NEXT TASK:")
+    if next_task:
+        text   = entry_text(next_task)
+        at     = entry_at(next_task)
+        suffix = f"  [{at}]" if at else ""
+        lines.append(f"- {text}{suffix}")
+    else:
+        lines.append("- (none)")
+    lines.append("")
+    lines.append("=== END OF REFLECTION ===")
+    lines.append("Paste this at the start of any AI chat to restore full context.")
+    return "\n".join(lines)
+
+
+# ── HTTP server ─────────────────────────────────────────────────────────────────
+
+class AKSHandler(BaseHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):
+        pass  # silence default access log
+
+    def _send(self, body, content_type, status=200):
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, data, status=200):
+        self._send(json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8", status)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path == "/":
+            self._send(HTML_PAGE, "text/html; charset=utf-8")
+
+        elif path == "/api/data":
+            try:
+                self._json(load_data())
+            except SystemExit:
+                self._json({"error": "aks.json not found"}, 404)
+
+        elif path == "/api/mtime":
+            mtime = os.path.getmtime(AKS_FILE) if os.path.exists(AKS_FILE) else 0
+            self._json({"mtime": mtime})
+
+        elif path == "/api/dump":
+            try:
+                self._json({"text": build_dump(load_data())})
+            except SystemExit:
+                self._json({"error": "aks.json not found"}, 404)
+
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        if self.path.split("?")[0] != "/api/write":
+            self._json({"error": "not found"}, 404)
+            return
+
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body   = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError:
+            self._json({"error": "invalid JSON"}, 400)
+            return
+
+        action = body.get("action", "")
+        text   = body.get("text", "").strip()
+
+        if not text:
+            self._json({"error": "empty text"}, 400)
+            return
+
+        try:
+            data = load_data()
+        except SystemExit:
+            self._json({"error": "aks.json not found"}, 404)
+            return
+
+        if   action == "done":        data["what_is_built"].append(make_entry(text))
+        elif action == "bug":         data["bugs_fixed"].append(make_entry(text))
+        elif action == "next":        data["next_task"] = make_entry(text)
+        elif action == "inprogress":  data["in_progress"].append(make_entry(text))
+        elif action == "decision":    data["decisions_made"].append(make_entry(text))
+        elif action == "donttouch":   data["do_not_touch"].append(make_entry(text))
+        else:
+            self._json({"error": f"unknown action: {action}"}, 400)
+            return
+
+        save_data(data)
+        self._json({"ok": True})
+
+
+# ── commands ────────────────────────────────────────────────────────────────────
 
 def cmd_init(args):
     if os.path.exists(AKS_FILE):
         print(f"{AKS_FILE} already exists. Delete it first if you want to reinitialize.")
         sys.exit(1)
-
     name = args.name if args.name else os.path.basename(os.getcwd())
     data = {
         "project_name": name,
         "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "what_is_built": [],
-        "in_progress": [],
-        "decisions_made": [],
-        "bugs_fixed": [],
-        "do_not_touch": [],
-        "next_task": ""
+        "in_progress":   [],
+        "decisions_made":[],
+        "bugs_fixed":    [],
+        "do_not_touch":  [],
+        "next_task":     ""
     }
     save_data(data)
     print(f"Initialized {AKS_FILE} for project: {name}")
@@ -116,8 +813,8 @@ def cmd_next(args):
 
 
 def cmd_status(args):
-    data = load_data()
-    name = data.get("project_name", "unknown")
+    data    = load_data()
+    name    = data.get("project_name", "unknown")
     updated = fmt_last_updated(data.get("last_updated", ""))
     divider = "=" * 50
 
@@ -135,22 +832,22 @@ def cmd_status(args):
             print("  (none)")
             return
         for item in items:
-            at = entry_at(item)
-            text = entry_text(item)
+            at     = entry_at(item)
+            text   = entry_text(item)
             prefix = f"  [{at}]  " if at else "  "
             print(f"{prefix}{text}")
 
-    section("WHAT IS BUILT", data.get("what_is_built", []))
-    section("IN PROGRESS", data.get("in_progress", []))
-    section("DECISIONS MADE", data.get("decisions_made", []))
-    section("BUGS FIXED", data.get("bugs_fixed", []))
-    section("DO NOT TOUCH", data.get("do_not_touch", []))
+    section("WHAT IS BUILT",   data.get("what_is_built",  []))
+    section("IN PROGRESS",     data.get("in_progress",    []))
+    section("DECISIONS MADE",  data.get("decisions_made", []))
+    section("BUGS FIXED",      data.get("bugs_fixed",     []))
+    section("DO NOT TOUCH",    data.get("do_not_touch",   []))
 
     next_task = data.get("next_task", "")
     print("\nNEXT TASK")
     if next_task:
-        at = entry_at(next_task)
-        text = entry_text(next_task)
+        at     = entry_at(next_task)
+        text   = entry_text(next_task)
         prefix = f"  [{at}]  " if at else "  "
         print(f"{prefix}{text}")
     else:
@@ -160,48 +857,8 @@ def cmd_status(args):
 
 
 def cmd_dump(args):
-    data = load_data()
-    name = data.get("project_name", "unknown")
-    updated = fmt_last_updated(data.get("last_updated", ""))
-
-    lines = [
-        f"=== AKS REFLECTION — {name} ===",
-        f"Last updated: {updated}",
-        "",
-    ]
-
-    def section(title, items):
-        lines.append(f"{title}:")
-        if items:
-            for item in items:
-                text = entry_text(item)
-                at = entry_at(item)
-                suffix = f"  [{at}]" if at else ""
-                lines.append(f"- {text}{suffix}")
-        else:
-            lines.append("- (none)")
-        lines.append("")
-
-    section("WHAT IS BUILT", data.get("what_is_built", []))
-    section("IN PROGRESS", data.get("in_progress", []))
-    section("DECISIONS MADE", data.get("decisions_made", []))
-    section("BUGS FIXED", data.get("bugs_fixed", []))
-    section("DO NOT TOUCH", data.get("do_not_touch", []))
-
-    next_task = data.get("next_task", "")
-    lines.append("NEXT TASK:")
-    if next_task:
-        text = entry_text(next_task)
-        at = entry_at(next_task)
-        suffix = f"  [{at}]" if at else ""
-        lines.append(f"- {text}{suffix}")
-    else:
-        lines.append("- (none)")
-    lines.append("")
-    lines.append("=== END OF REFLECTION ===")
-    lines.append("Paste this at the start of any AI chat to restore full context.")
-
-    output = "\n".join(lines)
+    data   = load_data()
+    output = build_dump(data)
     print(output)
 
     if getattr(args, "copy", False):
@@ -213,7 +870,37 @@ def cmd_dump(args):
             print("\nTip: install pyperclip for auto-copy  →  pip install pyperclip")
 
 
-# ── CLI wiring ─────────────────────────────────────────────────────────────────
+def cmd_serve(args):
+    if not os.path.exists(AKS_FILE):
+        print(f"Error: {AKS_FILE} not found. Run 'python aks.py init' first.")
+        sys.exit(1)
+
+    ports  = [5050, 5051, 5052, 8080, 8081]
+    server = None
+    port   = None
+    for p in ports:
+        try:
+            server = HTTPServer(("localhost", p), AKSHandler)
+            port   = p
+            break
+        except OSError:
+            continue
+
+    if not server:
+        print(f"Error: could not bind to any port ({', '.join(str(p) for p in ports)}).")
+        sys.exit(1)
+
+    url = f"http://localhost:{port}"
+    print(f"AKS Dashboard  →  {url}")
+    print("Press Ctrl+C to stop.")
+    webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+
+
+# ── CLI wiring ──────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -245,6 +932,9 @@ def main():
 
     p_status = sub.add_parser("status", help="Pretty-print current project state in terminal")
     p_status.set_defaults(func=cmd_status)
+
+    p_serve = sub.add_parser("serve", help="Open local web dashboard in browser")
+    p_serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
     args.func(args)
