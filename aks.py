@@ -6,8 +6,14 @@ import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-if sys.platform == "win32":
+# When frozen by PyInstaller (--windowed), stdout is a NullWriter with no reconfigure().
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# Double-click on the exe → no CLI args → default to serve.
+if getattr(sys, "frozen", False) and len(sys.argv) == 1:
+    os.chdir(os.path.dirname(sys.executable))
+    sys.argv.append("serve")
 
 AKS_FILE = "aks.json"
 
